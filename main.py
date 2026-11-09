@@ -220,8 +220,8 @@ def main():
         choice = input("Choice: ").strip()
         try:
             if choice == "1":
-                filename = input("Excel path [data/capability_test_20261103.xlsx]: ").strip()
-                data = load_data(filename or "data/capability_test_20261103.xlsx")
+                filename = input("Excel path [data/capability_test.xlsx]: ").strip()
+                data = load_data(filename or "data/capability_test.xlsx")
                 selected = measurements = averages = groups = None
                 normality = stability = False
                 print(f"Loaded {len(data)} rows.")
