@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import anderson, probplot
+from scipy.stats import anderson, norm
 
 D2, A2, D3, D4 = 2.326, 0.577, 0.0, 2.114
 OUTPUT = Path("outputs")
@@ -91,30 +91,65 @@ def calculate_subgroups(measurements, averages):
     return groups
 
 
-def validate_normality(measurements, lsl, usl):
-    """Create histogram and Q-Q plot; apply Anderson-Darling at 5%."""
+def validate_normality(measurements, groups, lsl, usl):
+    """Check normality and create book-style histogram and probability plot."""
     values = measurements["test_result"].astype(float).to_numpy()
+    mean = values.mean()
+    overall_sigma = values.std(ddof=1)
+    within_sigma = groups["range"].mean() / D2
+    if overall_sigma <= 0 or within_sigma <= 0:
+        raise ValueError("Standard deviations must be positive.")
+
     test = anderson(values, dist="norm")
     index = np.argmin(abs(np.asarray(test.significance_level) - 5.0))
     passed = bool(test.statistic < test.critical_values[index])
     print(f"Anderson-Darling statistic: {test.statistic:.4f}; "
           f"5% critical value: {test.critical_values[index]:.4f}")
     print("Normality not rejected." if passed else "Normality rejected.")
-    fig, ax = plt.subplots()
-    ax.hist(values, bins="auto", density=True, edgecolor="white")
-    ax.axvline(lsl, color="red", ls="--", label="LSL")
-    ax.axvline(usl, color="red", ls="--", label="USL")
+
+    # Histogram with normal curves for within-subgroup and overall variation.
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.hist(values, bins=12, density=True, color="lightgray",
+            edgecolor="black", label="Measurements")
+    x = np.linspace(min(lsl, values.min()) - 0.1,
+                    max(usl, values.max()) + 0.1, 500)
+    ax.plot(x, norm.pdf(x, mean, within_sigma), "--", linewidth=2,
+            label="Within")
+    ax.plot(x, norm.pdf(x, mean, overall_sigma), "-", linewidth=2,
+            label="Overall")
+    ax.axvline(lsl, color="firebrick", linestyle=":", label="LSL")
+    ax.axvline(usl, color="firebrick", linestyle=":", label="USL")
     ax.set(title="Individual measurements", xlabel="Value", ylabel="Density")
     ax.legend()
     fig.tight_layout()
     fig.savefig(OUTPUT / "histogram.png", dpi=150)
     plt.close(fig)
-    fig, ax = plt.subplots()
-    probplot(values, dist="norm", plot=ax)
-    ax.set_title("Normal Q-Q plot")
+
+    # Normal probability paper: values on X, probabilities on Y.
+    # Use normal quantiles to make probability ticks non-linear in percentage.
+    ordered = np.sort(values)
+    n = len(ordered)
+    probabilities = (np.arange(1, n + 1) - 0.5) / n
+    z = norm.ppf(probabilities)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.scatter(ordered, z, s=16, color="black")
+    x_line = np.linspace(ordered.min() - 0.05, ordered.max() + 0.05, 200)
+    ax.plot(x_line, (x_line - mean) / overall_sigma, color="gray", linewidth=1)
+    probability_ticks = np.array([0.001, 0.01, 0.05, 0.20, 0.50,
+                                  0.80, 0.95, 0.99, 0.999])
+    ax.set_yticks(norm.ppf(probability_ticks))
+    ax.set_yticklabels([".001", ".01", ".05", ".20", ".50",
+                        ".80", ".95", ".99", ".999"])
+    ax.set_ylim(norm.ppf(0.001), norm.ppf(0.999))
+    ax.set(title="Normal Probability Plot", xlabel="Measurement",
+           ylabel="Cumulative probability")
+    ax.grid(alpha=0.2, linestyle=":")
+    ax.text(0.97, 0.06, f"AD statistic: {test.statistic:.3f}",
+            transform=ax.transAxes, ha="right")
     fig.tight_layout()
     fig.savefig(OUTPUT / "qq_plot.png", dpi=150)
     plt.close(fig)
+    print("Updated histogram and normal probability plot saved to outputs/.")
     return passed
 
 
@@ -219,7 +254,7 @@ def main():
                 lsl = float(selected["minimum_expected"].iloc[0])
                 usl = float(selected["maximum_expected"].iloc[0])
                 if choice == "5":
-                    normality = validate_normality(measurements, lsl, usl)
+                    normality = validate_normality(measurements, groups, lsl, usl)
                 elif choice == "6":
                     stability = validate_stability(groups)
                 else:
