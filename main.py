@@ -12,6 +12,23 @@ from scipy.stats import anderson, norm
 D2, A2, D3, D4 = 2.326, 0.577, 0.0, 2.114
 OUTPUT = Path("outputs")
 
+# Consistent visual style for all four charts.
+PLOT_PRIMARY = "black"
+PLOT_SECONDARY = "dimgray"
+PLOT_LIMIT = "gray"
+PLOT_FILL = "gainsboro"
+FIGSIZE = (9, 5)
+
+plt.rcParams.update({
+    "font.family": "DejaVu Sans",
+    "font.size": 11,
+    "axes.titlesize": 16,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
+})
+
 
 def load_data(path):
     """Import M3 data without losing leading zeros in identifiers."""
@@ -91,8 +108,26 @@ def calculate_subgroups(measurements, averages):
     return groups
 
 
+def anderson_darling_pvalue(statistic, sample_size):
+    """Approximate Anderson-Darling normality p-value using a Stephens correction.
+
+    The adjustment and piecewise formulas are standard approximations.
+    Values near 0 or 1 should not be interpreted as exact probabilities.
+    """
+    adjusted = statistic * (1 + 0.75 / sample_size + 2.25 / sample_size ** 2)
+    if adjusted < 0.2:
+        p = 1 - np.exp(-13.436 + 101.14 * adjusted - 223.73 * adjusted ** 2)
+    elif adjusted < 0.34:
+        p = 1 - np.exp(-8.318 + 42.796 * adjusted - 59.938 * adjusted ** 2)
+    elif adjusted < 0.6:
+        p = np.exp(0.9177 - 4.279 * adjusted - 1.38 * adjusted ** 2)
+    else:
+        p = np.exp(1.2937 - 5.709 * adjusted + 0.0186 * adjusted ** 2)
+    return float(np.clip(p, 0, 1))
+
+
 def validate_normality(measurements, groups, lsl, usl):
-    """Check normality and create book-style histogram and probability plot."""
+    """Check normality and create matching histogram/probability charts."""
     values = measurements["test_result"].astype(float).to_numpy()
     mean = values.mean()
     overall_sigma = values.std(ddof=1)
@@ -102,79 +137,93 @@ def validate_normality(measurements, groups, lsl, usl):
 
     test = anderson(values, dist="norm")
     index = np.argmin(abs(np.asarray(test.significance_level) - 5.0))
-    passed = bool(test.statistic < test.critical_values[index])
+    critical = test.critical_values[index]
+    pvalue = anderson_darling_pvalue(test.statistic, len(values))
+    passed = bool(test.statistic < critical)
     print(f"Anderson-Darling statistic: {test.statistic:.4f}; "
-          f"5% critical value: {test.critical_values[index]:.4f}")
+          f"approximate p-value: {pvalue:.3f}; "
+          f"5% critical value: {critical:.4f}")
     print("Normality not rejected." if passed else "Normality rejected.")
 
-    # Histogram with normal curves for within-subgroup and overall variation.
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.hist(values, bins=12, density=True, color="lightgray",
-            edgecolor="black", label="Measurements")
+    # Histogram with normal curves for within and overall variation.
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.hist(values, bins=12, density=True, color=PLOT_FILL,
+            edgecolor=PLOT_PRIMARY, linewidth=1)
     x = np.linspace(min(lsl, values.min()) - 0.1,
                     max(usl, values.max()) + 0.1, 500)
     ax.plot(x, norm.pdf(x, mean, within_sigma), "--", linewidth=2,
-            label="Within")
+            color=PLOT_SECONDARY, label="Within")
     ax.plot(x, norm.pdf(x, mean, overall_sigma), "-", linewidth=2,
-            label="Overall")
-    ax.axvline(lsl, color="firebrick", linestyle=":", label="LSL")
-    ax.axvline(usl, color="firebrick", linestyle=":", label="USL")
-    ax.set(title="Individual measurements", xlabel="Value", ylabel="Density")
-    ax.legend()
+            color=PLOT_PRIMARY, label="Overall")
+    ax.axvline(lsl, color=PLOT_LIMIT, linestyle=":", linewidth=1.2)
+    ax.axvline(usl, color=PLOT_LIMIT, linestyle=":", linewidth=1.2)
+    ymax = ax.get_ylim()[1]
+    ax.text(lsl, ymax * 0.98, "LSL", ha="center", va="top")
+    ax.text(usl, ymax * 0.98, "USL", ha="center", va="top")
+    ax.set(title="Individual measurements", xlabel="Measurement", ylabel="Density")
+    ax.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(OUTPUT / "histogram.png", dpi=150)
     plt.close(fig)
 
-    # Normal probability paper: values on X, probabilities on Y.
-    # Use normal quantiles to make probability ticks non-linear in percentage.
+    # Book-style normal probability paper: measured values along X.
     ordered = np.sort(values)
     n = len(ordered)
     probabilities = (np.arange(1, n + 1) - 0.5) / n
     z = norm.ppf(probabilities)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.scatter(ordered, z, s=16, color="black")
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.scatter(ordered, z, s=18, color=PLOT_PRIMARY)
     x_line = np.linspace(ordered.min() - 0.05, ordered.max() + 0.05, 200)
-    ax.plot(x_line, (x_line - mean) / overall_sigma, color="gray", linewidth=1)
+    ax.plot(x_line, (x_line - mean) / overall_sigma,
+            color=PLOT_SECONDARY, linewidth=1.2)
     probability_ticks = np.array([0.001, 0.01, 0.05, 0.20, 0.50,
                                   0.80, 0.95, 0.99, 0.999])
     ax.set_yticks(norm.ppf(probability_ticks))
     ax.set_yticklabels([".001", ".01", ".05", ".20", ".50",
                         ".80", ".95", ".99", ".999"])
     ax.set_ylim(norm.ppf(0.001), norm.ppf(0.999))
+    ax.grid(alpha=0.25, linestyle=":", color=PLOT_LIMIT)
     ax.set(title="Normal Probability Plot", xlabel="Measurement",
            ylabel="Cumulative probability")
-    ax.grid(alpha=0.2, linestyle=":")
-    ax.text(0.97, 0.06, f"AD statistic: {test.statistic:.3f}",
-            transform=ax.transAxes, ha="right")
+    ax.text(0.97, 0.08, f"Approx. P-Value: {pvalue:.3f}",
+            transform=ax.transAxes, ha="right", color=PLOT_PRIMARY)
     fig.tight_layout()
     fig.savefig(OUTPUT / "qq_plot.png", dpi=150)
     plt.close(fig)
-    print("Updated histogram and normal probability plot saved to outputs/.")
+    print("Histogram and normal probability plot saved to outputs/.")
     return passed
 
 
 def validate_stability(groups):
-    """Create X-bar and R charts, using constants for groups of five."""
+    """Create matching X-bar and R charts for subgroups of five."""
     grand_mean = groups["mean"].mean()
     r_bar = groups["range"].mean()
     settings = [
-        ("mean", "X-bar", grand_mean, grand_mean - A2 * r_bar,
-         grand_mean + A2 * r_bar, "xbar.png"),
-        ("range", "R", r_bar, D3 * r_bar, D4 * r_bar, "r_chart.png"),
+        ("mean", "X-bar control chart", grand_mean, grand_mean - A2 * r_bar,
+         grand_mean + A2 * r_bar, "X-bar", "xbar.png"),
+        ("range", "R control chart", r_bar, D3 * r_bar,
+         D4 * r_bar, "R", "r_chart.png"),
     ]
     stable = True
-    for field, label, center, lower, upper, name in settings:
+    for field, title, center, lower, upper, ylabel, name in settings:
         outside = (groups[field] < lower) | (groups[field] > upper)
         if outside.any():
             stable = False
-            print(f"{label}: points beyond control limits: "
+            print(f"{ylabel}: points beyond control limits: "
                   f"{groups.loc[outside, 'subgroup'].tolist()}")
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.plot(groups["subgroup"], groups[field], "-o")
-        for value, caption, style in [(center, "CL", "-"), (lower, "LCL", "--"), (upper, "UCL", "--")]:
-            ax.axhline(value, ls=style, label=f"{caption}: {value:.4f}")
-        ax.set(title=f"{label} control chart", xlabel="Subgroup", ylabel=label)
-        ax.legend()
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+        ax.plot(groups["subgroup"], groups[field], "-o",
+                color=PLOT_PRIMARY, linewidth=1.5, markersize=5)
+        for value, caption, style in [
+            (center, "CL", "-"),
+            (lower, "LCL", "--"),
+            (upper, "UCL", "--"),
+        ]:
+            ax.axhline(value, ls=style, color=PLOT_SECONDARY,
+                       linewidth=1.2, label=f"{caption}: {value:.4f}")
+        ax.grid(alpha=0.25, linestyle=":", color=PLOT_LIMIT)
+        ax.set(title=title, xlabel="Subgroup", ylabel=ylabel)
+        ax.legend(frameon=False)
         fig.tight_layout()
         fig.savefig(OUTPUT / name, dpi=150)
         plt.close(fig)
